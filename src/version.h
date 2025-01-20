@@ -1,2 +1,1 @@
-#pragma once
-#define MG_VERSION "7.2"
+#define MG_VERSION "7.16"

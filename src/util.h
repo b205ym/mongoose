@@ -1,63 +1,82 @@
 #pragma once
 
 #include "arch.h"
+#include "config.h"
+#include "net.h"
 #include "str.h"
 
-char *mg_file_read(const char *path);
-int64_t mg_file_size(const char *path);
-bool mg_file_write(const char *path, const void *buf, size_t len);
-bool mg_file_printf(const char *path, const char *fmt, ...);
-void mg_random(void *buf, size_t len);
-bool mg_globmatch(const char *pattern, int plen, const char *s, int n);
-bool mg_next_comma_entry(struct mg_str *s, struct mg_str *k, struct mg_str *v);
+#if MG_ENABLE_ASSERT
+#include <assert.h>
+#elif !defined(assert)
+#define assert(x)
+#endif
+
+void mg_bzero(volatile unsigned char *buf, size_t len);
+bool mg_random(void *buf, size_t len);
+char *mg_random_str(char *buf, size_t len);
 uint16_t mg_ntohs(uint16_t net);
 uint32_t mg_ntohl(uint32_t net);
-char *mg_hexdump(const void *buf, size_t len);
-char *mg_hex(const void *buf, int len, char *dst);
-void mg_unhex(const char *buf, int len, unsigned char *to);
-unsigned long mg_unhexn(const char *s, int len);
-int mg_asprintf(char **buf, size_t size, const char *fmt, ...);
-int mg_vasprintf(char **buf, size_t size, const char *fmt, va_list ap);
-int64_t mg_to64(struct mg_str str);
-double mg_time(void);
-unsigned long mg_millis(void);
-void mg_usleep(unsigned long usecs);
-
-#if MG_ENABLE_FS
-#ifdef _WIN32
-typedef struct _stati64 mg_stat_t;
-#else
-typedef struct stat mg_stat_t;
-#endif
-int mg_stat(const char *path, mg_stat_t *);
-FILE *mg_fopen(const char *fp, const char *mode);
-#endif
+uint32_t mg_crc32(uint32_t crc, const char *buf, size_t len);
+uint64_t mg_millis(void);  // Return milliseconds since boot
+bool mg_path_is_sane(const struct mg_str path);
 
 #define mg_htons(x) mg_ntohs(x)
 #define mg_htonl(x) mg_ntohl(x)
 
-#define MG_SWAP16(x) ((((x) >> 8) & 255) | ((x & 255) << 8))
-#define MG_SWAP32(x) \
-  (((x) >> 24) | (((x) &0xff0000) >> 8) | (((x) &0xff00) << 8) | ((x) << 24))
+#define MG_U32(a, b, c, d)                                           \
+  (((uint32_t) ((a) & 255) << 24) | ((uint32_t) ((b) & 255) << 16) | \
+   ((uint32_t) ((c) & 255) << 8) | (uint32_t) ((d) & 255))
 
-#if !defined(WEAK)
-#if (defined(__GNUC__) || defined(__clang__) || \
-     defined(__TI_COMPILER_VERSION__)) &&       \
-    !defined(_WIN32)
-#define WEAK __attribute__((weak))
+#define MG_IPV4(a, b, c, d) mg_htonl(MG_U32(a, b, c, d))
+
+// For printing IPv4 addresses: printf("%d.%d.%d.%d\n", MG_IPADDR_PARTS(&ip))
+#define MG_U8P(ADDR) ((uint8_t *) (ADDR))
+#define MG_IPADDR_PARTS(ADDR) \
+  MG_U8P(ADDR)[0], MG_U8P(ADDR)[1], MG_U8P(ADDR)[2], MG_U8P(ADDR)[3]
+
+#define MG_LOAD_BE16(p) ((uint16_t) ((MG_U8P(p)[0] << 8U) | MG_U8P(p)[1]))
+#define MG_LOAD_BE24(p) \
+  ((uint32_t) ((MG_U8P(p)[0] << 16U) | (MG_U8P(p)[1] << 8U) | MG_U8P(p)[2]))
+#define MG_STORE_BE16(p, n)           \
+  do {                                \
+    MG_U8P(p)[0] = ((n) >> 8U) & 255; \
+    MG_U8P(p)[1] = (n) &255;          \
+  } while (0)
+
+#define MG_REG(x) ((volatile uint32_t *) (x))[0]
+#define MG_BIT(x) (((uint32_t) 1U) << (x))
+#define MG_SET_BITS(R, CLRMASK, SETMASK) (R) = ((R) & ~(CLRMASK)) | (SETMASK)
+
+#define MG_ROUND_UP(x, a) ((a) == 0 ? (x) : ((((x) + (a) -1) / (a)) * (a)))
+#define MG_ROUND_DOWN(x, a) ((a) == 0 ? (x) : (((x) / (a)) * (a)))
+
+#if defined(__GNUC__)
+#define MG_ARM_DISABLE_IRQ() asm volatile("cpsid i" : : : "memory")
+#define MG_ARM_ENABLE_IRQ() asm volatile("cpsie i" : : : "memory")
+#elif defined(__CCRH__)
+#define MG_RH850_DISABLE_IRQ() __DI()
+#define MG_RH850_ENABLE_IRQ() __EI()
 #else
-#define WEAK
-#endif
+#define MG_ARM_DISABLE_IRQ()
+#define MG_ARM_ENABLE_IRQ()
 #endif
 
-// Expands to a string representation of its argument: e.g.
-// MG_STRINGIFY_LITERAL(5) expands to "5"
-#if !defined(_MSC_VER) || _MSC_VER >= 1900
-#define MG_STRINGIFY_LITERAL(...) #__VA_ARGS__
+#if defined(__CC_ARM)
+#define MG_DSB() __dsb(0xf)
+#elif defined(__ARMCC_VERSION)
+#define MG_DSB() __builtin_arm_dsb(0xf)
+#elif defined(__GNUC__) && defined(__arm__) && defined(__thumb__)
+#define MG_DSB() asm("DSB 0xf")
+#elif defined(__ICCARM__)
+#define MG_DSB() __iar_builtin_DSB()
 #else
-#define MG_STRINGIFY_LITERAL(x) #x
+#define MG_DSB()
 #endif
 
+struct mg_addr;
+int mg_check_ip_acl(struct mg_str acl, struct mg_addr *remote_ip);
+
+// Linked list management macros
 #define LIST_ADD_HEAD(type_, head_, elem_) \
   do {                                     \
     (elem_)->next = (*head_);              \
@@ -77,8 +96,3 @@ FILE *mg_fopen(const char *fp, const char *mode);
     while (*h != (elem_)) h = &(*h)->next; \
     *h = (elem_)->next;                    \
   } while (0)
-
-// Expands to a string representation of its argument, which can be a macro:
-// #define FOO 123
-// MG_STRINGIFY_MACRO(FOO)  // Expands to 123
-#define MG_STRINGIFY_MACRO(x) MG_STRINGIFY_LITERAL(x)
